@@ -6,6 +6,7 @@ import requests
 import json
 import io
 import os
+from openpyxl.styles import Font
 from dotenv import load_dotenv
 
 load_dotenv()  # Carrega as variáveis de ambiente do arquivo .env
@@ -153,6 +154,16 @@ def buscar_itens_pedido(numero_pedido):
             
     return None
 
+def buscar_produto_por_sku(sku):
+    # O Bling V3 permite filtrar produtos pelo código (SKU)
+    url_busca = f"{BASE_URL}/produtos?codigo={sku}"
+    resposta = request_bling(url_busca)
+    
+    if resposta and "data" in resposta and len(resposta["data"]) > 0:
+        # Retorna o primeiro produto encontrado com esse SKU
+        return resposta["data"][0]
+    return None
+
 def buscar_estrutura(id_produto):
     conexao = sqlite3.connect("custos_fabrica.db")
     cursor = conexao.cursor()
@@ -235,31 +246,64 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-#st.write("Bem-vindo ao gerador automático de relatórios integrados ao Bling!")
-numero_pedido = st.text_input("Digite o **Número do Pedido** de Venda:")
+numero_pedido = ""
+sku_produto = ""
 
-if st.button("**PESQUISAR PEDIDO**"):
-    if numero_pedido:
-        #st.info(f"Pesquisando...")
-        itens_vendidos = buscar_itens_pedido(numero_pedido)
-        # Chamamos a função atualizada
+modo_busca = st.radio("Como você deseja consultar os custos?", ["Pelo Número do Pedido", "Pelo SKU do Produto"])
+
+if modo_busca == "Pelo Número do Pedido":
+    numero_pedido = st.text_input("Digite o **Número do Pedido** de Venda:")
+    qtde_simulacao = 0 # No caso de pedido, a quantidade vem dele mesmo
+    clicou_pesquisar = st.button("**PESQUISAR PEDIDO**")
+    
+else:
+    sku_produto = st.text_input("Digite o **SKU do Produto**:")
+    # Como não temos um pedido para dizer quantos foram vendidos, pedimos para o usuário:
+    qtde_simulacao = st.number_input("Quantidade para simular:", min_value=1, value=1)
+    clicou_pesquisar = st.button("**PESQUISAR PRODUTO**")
+
+if clicou_pesquisar:
+    itens_vendidos = []
+    nome_cliente = ""
+    
+    # 1. SE A BUSCA FOR POR PEDIDO:
+    if modo_busca == "Pelo Número do Pedido" and numero_pedido:
         pedido_completo = buscar_itens_pedido(numero_pedido)
         
         if pedido_completo:
-            # Extraímos os itens e o nome do cliente de dentro do pedido completo
             itens_vendidos = pedido_completo.get("itens", [])
             nome_cliente = pedido_completo.get("contato", {}).get("nome", "Cliente não identificado")
-            
-            #st.success(f"Pedido encontrado! Ele possui {len(itens_vendidos)} linha(s) de produto(s).")
-            
-            # --- NOVIDADE: Exibe o nome do cliente no topo (vai sair no PDF!) ---
             st.markdown(f"## Cliente: **{nome_cliente}**")
-            st.write("---")
+        else:
+            st.warning("⚠️ Pedido não encontrado ou sem itens.")
             
-            todas_linhas_excel = []
-            linha_atual_excel = 1 # O Excel sempre começa na linha 1
+    # 2. SE A BUSCA FOR POR SKU:
+    elif modo_busca == "Pelo SKU do Produto" and sku_produto:
+        produto_bling = buscar_produto_por_sku(sku_produto)
+        
+        if produto_bling:
+            # Construímos um "item de pedido falso" para o seu código de Excel reciclar
+            itens_vendidos = [{
+                "descricao": produto_bling.get("nome", "Produto sem nome"),
+                "quantidade": qtde_simulacao,
+                "codigo": sku_produto,
+                "produto": {"id": produto_bling.get("id")}
+            }]
+            nome_cliente = "Simulação Avulsa (Por SKU)"
+            st.markdown(f"## **{nome_cliente}**")
+        else:
+            st.warning("⚠️ Nenhum produto encontrado com este SKU no Bling.")
+
+    # --- O SEU CÓDIGO ORIGINAL CONTINUA INTACTO DAQUI PARA BAIXO ---
+    if len(itens_vendidos) > 0:
+        st.write("---")
+        todas_linhas_excel = []
+        linha_atual_excel = 1
+        
+        # for item in itens_vendidos: 
+        # (seu código segue perfeitamente igual)
             
-            for item in itens_vendidos:
+        for item in itens_vendidos:
                 nome_produto = item.get("descricao", "Produto sem nome")
                 qtde_vendida = int(item.get("quantidade", 0))
                 id_produto_pai = item.get("produto", {}).get("id")
@@ -366,7 +410,7 @@ if st.button("**PESQUISAR PEDIDO**"):
                     linha_atual_excel += 2 # Pula uma linha extra para espaçamento
 
            # --- GERADOR DE EXCEL CORRIGIDO (ESTILO CUSTOS.PY) ---
-            if todas_linhas_excel:
+        if todas_linhas_excel:
                 st.write("---")
                 df_relatorio = pd.DataFrame(todas_linhas_excel)
                 buffer_excel = io.BytesIO()
@@ -425,6 +469,7 @@ if st.button("**PESQUISAR PEDIDO**"):
                 st.download_button(
                     label="📥 Baixar Planilha",
                     data=buffer_excel.getvalue(),
-                    file_name=f"Custos_Pedido_{numero_pedido}.xlsx",
+                    file_name=f"Custos_Pedido_{numero_pedido}.xlsx" if numero_pedido else f"Custos_SKU_{sku_produto}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                
                 )
