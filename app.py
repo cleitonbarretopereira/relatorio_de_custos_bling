@@ -9,7 +9,7 @@ import os
 from openpyxl.styles import Font
 from dotenv import load_dotenv
 
-load_dotenv()  # Carrega as variáveis de ambiente do arquivo .env
+load_dotenv()
 
 def configurar_banco():
     conexao = sqlite3.connect("custos_fabrica.db")
