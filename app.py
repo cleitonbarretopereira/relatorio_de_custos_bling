@@ -6,7 +6,6 @@ import requests
 import json
 import io
 import os
-from openpyxl.styles import Font
 from dotenv import load_dotenv
 
 load_dotenv()  # Carrega as variáveis de ambiente do arquivo .env
@@ -36,13 +35,29 @@ def configurar_banco():
 
 CREDENCIAIS = "tokens.json"
 
+# --- NOVA FUNÇÃO DE CARREGAR TOKENS DA NUVEM ---
 def carregar_tokens():
-   
-    try:
-        with open(CREDENCIAIS, "r") as f:
-            return json.load(f)
-    except:
+    bin_id = os.getenv("JSONBIN_BIN_ID")
+    master_key = os.getenv("JSONBIN_MASTER_KEY")
+    
+    if not bin_id or not master_key:
         return None
+        
+    url = f"https://api.jsonbin.io/v3/b/{bin_id}"
+    headers = {
+        "X-Master-Key": master_key
+    }
+    
+    try:
+        # Pede para o JSONBin o arquivo
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            # O JSONBin guarda o nosso arquivo dentro de uma chave chamada "record"
+            return res.json().get("record") 
+    except Exception as e:
+        st.sidebar.error(f"Erro ao ler o cofre: {e}")
+        
+    return None
 
 def renovar_token_automatico():
     global HEADERS
@@ -50,6 +65,54 @@ def renovar_token_automatico():
     # Busca as credenciais direto do seu arquivo .env externo
     client_id = os.getenv("BLING_CLIENT_ID")
     client_secret = os.getenv("BLING_CLIENT_SECRET")
+    
+    # Garante que o processo pare caso o arquivo .env esteja desconfigurado
+    if not client_id or not client_secret:
+        st.sidebar.error("❌ Credenciais BLING_CLIENT_ID ou BLING_CLIENT_SECRET não encontradas no arquivo .env")
+        return False
+        
+    tokens_atuais = carregar_tokens()
+    if not tokens_atuais:
+        return False
+        
+    # --- A PARTE QUE ESTAVA FALTANDO COMEÇA AQUI ---
+    refresh_token = tokens_atuais.get("refresh_token")
+    url_token = "https://api.bling.com.br/Api/v3/oauth/token"
+    
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token
+    }
+    
+    try:
+        # Faz o pedido de renovação pro Bling
+        res = requests.post(url_token, auth=(client_id, client_secret), data=data)
+        
+        if res.status_code == 200:
+            novos_tokens = res.json()
+            
+            # --- SALVA O NOVO TOKEN NO COFRE DA NUVEM (JSONBIN) ---
+            bin_id = os.getenv("JSONBIN_BIN_ID")
+            master_key = os.getenv("JSONBIN_MASTER_KEY")
+            
+            if bin_id and master_key:
+                url_bin = f"https://api.jsonbin.io/v3/b/{bin_id}"
+                headers_bin = {
+                    "Content-Type": "application/json",
+                    "X-Master-Key": master_key
+                }
+                # Envia o token novo atualizando o arquivo lá no site
+                requests.put(url_bin, json=novos_tokens, headers=headers_bin)
+            
+            # Atualiza a memória do sistema para continuar trabalhando
+            novo_access = novos_tokens.get("access_token")
+            HEADERS = {"Authorization": f"Bearer {novo_access}", "Content-Type": "application/json"}
+            return True
+            
+    except Exception as e:
+        st.sidebar.error(f"Erro crítico na renovação: {e}")
+        
+    return False
     
     # Garante que o processo pare caso o arquivo .env esteja desconfigurado
     if not client_id or not client_secret:
