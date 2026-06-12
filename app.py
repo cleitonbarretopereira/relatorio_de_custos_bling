@@ -9,7 +9,7 @@ import os
 from openpyxl.styles import Font
 from dotenv import load_dotenv
 
-load_dotenv()  # Carrega as variáveis de ambiente do arquivo .env
+load_dotenv()
 
 def configurar_banco():
     conexao = sqlite3.connect("custos_fabrica.db")
@@ -36,13 +36,29 @@ def configurar_banco():
 
 CREDENCIAIS = "tokens.json"
 
+# --- NOVA FUNÇÃO DE CARREGAR TOKENS DA NUVEM ---
 def carregar_tokens():
-   
-    try:
-        with open(CREDENCIAIS, "r") as f:
-            return json.load(f)
-    except:
+    bin_id = os.getenv("JSONBIN_BIN_ID")
+    master_key = os.getenv("JSONBIN_MASTER_KEY")
+    
+    if not bin_id or not master_key:
         return None
+        
+    url = f"https://api.jsonbin.io/v3/b/{bin_id}"
+    headers = {
+        "X-Master-Key": master_key
+    }
+    
+    try:
+        # Pede para o JSONBin o arquivo
+        res = requests.get(url, headers=headers)
+        if res.status_code == 200:
+            # O JSONBin guarda o nosso arquivo dentro de uma chave chamada "record"
+            return res.json().get("record") 
+    except Exception as e:
+        st.sidebar.error(f"Erro ao ler o cofre: {e}")
+        
+    return None
 
 def renovar_token_automatico():
     global HEADERS
@@ -50,6 +66,54 @@ def renovar_token_automatico():
     # Busca as credenciais direto do seu arquivo .env externo
     client_id = os.getenv("BLING_CLIENT_ID")
     client_secret = os.getenv("BLING_CLIENT_SECRET")
+    
+    # Garante que o processo pare caso o arquivo .env esteja desconfigurado
+    if not client_id or not client_secret:
+        st.sidebar.error("❌ Credenciais BLING_CLIENT_ID ou BLING_CLIENT_SECRET não encontradas no arquivo .env")
+        return False
+        
+    tokens_atuais = carregar_tokens()
+    if not tokens_atuais:
+        return False
+        
+    # --- A PARTE QUE ESTAVA FALTANDO COMEÇA AQUI ---
+    refresh_token = tokens_atuais.get("refresh_token")
+    url_token = "https://api.bling.com.br/Api/v3/oauth/token"
+    
+    data = {
+        "grant_type": "refresh_token",
+        "refresh_token": refresh_token
+    }
+    
+    try:
+        # Faz o pedido de renovação pro Bling
+        res = requests.post(url_token, auth=(client_id, client_secret), data=data)
+        
+        if res.status_code == 200:
+            novos_tokens = res.json()
+            
+            # --- SALVA O NOVO TOKEN NO COFRE DA NUVEM (JSONBIN) ---
+            bin_id = os.getenv("JSONBIN_BIN_ID")
+            master_key = os.getenv("JSONBIN_MASTER_KEY")
+            
+            if bin_id and master_key:
+                url_bin = f"https://api.jsonbin.io/v3/b/{bin_id}"
+                headers_bin = {
+                    "Content-Type": "application/json",
+                    "X-Master-Key": master_key
+                }
+                # Envia o token novo atualizando o arquivo lá no site
+                requests.put(url_bin, json=novos_tokens, headers=headers_bin)
+            
+            # Atualiza a memória do sistema para continuar trabalhando
+            novo_access = novos_tokens.get("access_token")
+            HEADERS = {"Authorization": f"Bearer {novo_access}", "Content-Type": "application/json"}
+            return True
+            
+    except Exception as e:
+        st.sidebar.error(f"Erro crítico na renovação: {e}")
+        
+    return False
     
     # Garante que o processo pare caso o arquivo .env esteja desconfigurado
     if not client_id or not client_secret:
@@ -88,6 +152,16 @@ def buscar_itens_pedido(numero_pedido):
         if resposta_detalhes and "data" in resposta_detalhes:
             return resposta_detalhes["data"]
             
+    return None
+
+def buscar_produto_por_sku(sku):
+    # O Bling V3 permite filtrar produtos pelo código (SKU)
+    url_busca = f"{BASE_URL}/produtos?codigo={sku}"
+    resposta = request_bling(url_busca)
+    
+    if resposta and "data" in resposta and len(resposta["data"]) > 0:
+        # Retorna o primeiro produto encontrado com esse SKU
+        return resposta["data"][0]
     return None
 
 def buscar_estrutura(id_produto):
@@ -172,31 +246,64 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-#st.write("Bem-vindo ao gerador automático de relatórios integrados ao Bling!")
-numero_pedido = st.text_input("Digite o **Número do Pedido** de Venda:")
+numero_pedido = ""
+sku_produto = ""
 
-if st.button("**PESQUISAR PEDIDO**"):
-    if numero_pedido:
-        #st.info(f"Pesquisando...")
-        itens_vendidos = buscar_itens_pedido(numero_pedido)
-        # Chamamos a função atualizada
+modo_busca = st.radio("Como você deseja consultar os custos?", ["Pelo Número do Pedido", "Pelo SKU do Produto"])
+
+if modo_busca == "Pelo Número do Pedido":
+    numero_pedido = st.text_input("Digite o **Número do Pedido** de Venda:")
+    qtde_simulacao = 0 # No caso de pedido, a quantidade vem dele mesmo
+    clicou_pesquisar = st.button("**PESQUISAR PEDIDO**")
+    
+else:
+    sku_produto = st.text_input("Digite o **SKU do Produto**:")
+    # Como não temos um pedido para dizer quantos foram vendidos, pedimos para o usuário:
+    qtde_simulacao = st.number_input("Quantidade para simular:", min_value=1, value=1)
+    clicou_pesquisar = st.button("**PESQUISAR PRODUTO**")
+
+if clicou_pesquisar:
+    itens_vendidos = []
+    nome_cliente = ""
+    
+    # 1. SE A BUSCA FOR POR PEDIDO:
+    if modo_busca == "Pelo Número do Pedido" and numero_pedido:
         pedido_completo = buscar_itens_pedido(numero_pedido)
         
         if pedido_completo:
-            # Extraímos os itens e o nome do cliente de dentro do pedido completo
             itens_vendidos = pedido_completo.get("itens", [])
             nome_cliente = pedido_completo.get("contato", {}).get("nome", "Cliente não identificado")
-            
-            #st.success(f"Pedido encontrado! Ele possui {len(itens_vendidos)} linha(s) de produto(s).")
-            
-            # --- NOVIDADE: Exibe o nome do cliente no topo (vai sair no PDF!) ---
             st.markdown(f"## Cliente: **{nome_cliente}**")
-            st.write("---")
+        else:
+            st.warning("⚠️ Pedido não encontrado ou sem itens.")
             
-            todas_linhas_excel = []
-            linha_atual_excel = 1 # O Excel sempre começa na linha 1
+    # 2. SE A BUSCA FOR POR SKU:
+    elif modo_busca == "Pelo SKU do Produto" and sku_produto:
+        produto_bling = buscar_produto_por_sku(sku_produto)
+        
+        if produto_bling:
+            # Construímos um "item de pedido falso" para o seu código de Excel reciclar
+            itens_vendidos = [{
+                "descricao": produto_bling.get("nome", "Produto sem nome"),
+                "quantidade": qtde_simulacao,
+                "codigo": sku_produto,
+                "produto": {"id": produto_bling.get("id")}
+            }]
+            nome_cliente = "Simulação Avulsa (Por SKU)"
+            st.markdown(f"## **{nome_cliente}**")
+        else:
+            st.warning("⚠️ Nenhum produto encontrado com este SKU no Bling.")
+
+    # --- O SEU CÓDIGO ORIGINAL CONTINUA INTACTO DAQUI PARA BAIXO ---
+    if len(itens_vendidos) > 0:
+        st.write("---")
+        todas_linhas_excel = []
+        linha_atual_excel = 1
+        
+        # for item in itens_vendidos: 
+        # (seu código segue perfeitamente igual)
             
-            for item in itens_vendidos:
+        for item in itens_vendidos:
                 nome_produto = item.get("descricao", "Produto sem nome")
                 qtde_vendida = int(item.get("quantidade", 0))
                 id_produto_pai = item.get("produto", {}).get("id")
@@ -303,7 +410,7 @@ if st.button("**PESQUISAR PEDIDO**"):
                     linha_atual_excel += 2 # Pula uma linha extra para espaçamento
 
            # --- GERADOR DE EXCEL CORRIGIDO (ESTILO CUSTOS.PY) ---
-            if todas_linhas_excel:
+        if todas_linhas_excel:
                 st.write("---")
                 df_relatorio = pd.DataFrame(todas_linhas_excel)
                 buffer_excel = io.BytesIO()
@@ -362,6 +469,7 @@ if st.button("**PESQUISAR PEDIDO**"):
                 st.download_button(
                     label="📥 Baixar Planilha",
                     data=buffer_excel.getvalue(),
-                    file_name=f"Custos_Pedido_{numero_pedido}.xlsx",
+                    file_name=f"Custos_Pedido_{numero_pedido}.xlsx" if numero_pedido else f"Custos_SKU_{sku_produto}.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                
                 )

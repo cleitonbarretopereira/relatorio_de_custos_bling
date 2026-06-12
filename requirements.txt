@@ -1,5 +1,7 @@
 streamlit
+sqlite3
 pandas
 requests
+os
 openpyxl
 python-dotenv
