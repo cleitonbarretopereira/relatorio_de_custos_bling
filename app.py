@@ -6,7 +6,6 @@ import requests
 import json
 import io
 import os
-from openpyxl.styles import Font
 from dotenv import load_dotenv
 
 load_dotenv()  # Carrega as variáveis de ambiente do arquivo .env
