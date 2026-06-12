@@ -1,0 +1,8 @@
+.env
+tokens.json
+custos_fabrica.db
+custos.py
+credentials.json
+custos_cache.json
+custos_fabrica.db
+gerar_token_bling.py
