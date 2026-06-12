@@ -130,14 +130,34 @@ BASE_URL = "https://api.bling.com.br/Api/v3"
 HEADERS = {"Authorization": f"Bearer {ACCESS_TOKEN}", "Content-Type": "application/json"}
 
 def request_bling(url):
+    global HEADERS # Permite usar o cabeçalho atualizado após a renovação
     time.sleep(0.35) 
     res = requests.get(url, headers=HEADERS) 
     
     if res.status_code == 200:
         return res.json() 
+        
+    # --- O INTERCEPTADOR DE TOKEN EXPIRADO COMEÇA AQUI ---
+    elif res.status_code == 401:
+        st.sidebar.warning("🔄 Token expirado. Tentando renovar automaticamente...")
+        
+        # Chama a sua função de renovação
+        sucesso_renovacao = renovar_token_automatico()
+        
+        if sucesso_renovacao:
+            # Se deu certo, o sistema tenta fazer o mesmo pedido de novo com a chave nova
+            res_retry = requests.get(url, headers=HEADERS)
+            if res_retry.status_code == 200:
+                st.sidebar.success("✅ Token renovado com sucesso!")
+                return res_retry.json()
+        
+        # Se a renovação falhar, avisa o usuário
+        st.sidebar.error("❌ Falha na renovação do token. Verifique suas credenciais no JSONBin.")
+        return None
+        
     else:
         st.sidebar.error(f"⚠️ Erro de API (Status {res.status_code}) na URL: {url}")
-        return None 
+        return None
 
 def buscar_itens_pedido(numero_pedido):
     url_busca = f"{BASE_URL}/pedidos/vendas?numero={numero_pedido}"
